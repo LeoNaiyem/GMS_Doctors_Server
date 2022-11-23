@@ -3,6 +3,7 @@ const cors = require("cors");
 const app = express();
 const ObjectId = require("mongodb").ObjectId;
 const { MongoClient, ServerApiVersion } = require("mongodb");
+var jwt = require("jsonwebtoken");
 require("dotenv").config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 5000;
@@ -17,6 +18,23 @@ const client = new MongoClient(uri, {
   useUnifiedTopology: true,
   serverApi: ServerApiVersion.v1,
 });
+
+//security check
+function verifyToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).send({ message: "Unauthorized Access" });
+  }
+  const token = authHeader.split(" ")[1];
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, function (err, decoded) {
+    if (err) {
+      return res.status(403).send({ message: "Forbidden Access" });
+    }
+    req.decoded = decoded;
+    next();
+  });
+}
+
 async function run() {
   try {
     await client.connect();
@@ -24,6 +42,7 @@ async function run() {
     const serviceCollection = database.collection("services");
     const appointmentCollection = database.collection("appointments");
     const paymentCollection = database.collection("payments");
+    const userCollection = database.collection("users");
 
     // loading data from the database
     app.get("/services", async (req, res) => {
@@ -47,12 +66,17 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/appointments", async (req, res) => {
+    app.get("/appointments", verifyToken, async (req, res) => {
       const email = req.query.email;
-      const query = { email: email };
-      const cursor = appointmentCollection.find(query);
-      const result = await cursor.toArray();
-      res.send(result);
+      const decodedEmail = req.decoded.email;
+      if (decodedEmail === email) {
+        const query = { email: email };
+        const cursor = appointmentCollection.find(query);
+        const result = await cursor.toArray();
+        res.send(result);
+      } else {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
     });
 
     app.get("/appointments/:id", async (req, res) => {
@@ -60,6 +84,21 @@ async function run() {
       const query = { _id: ObjectId(id) };
       const result = await appointmentCollection.findOne(query);
       res.send(result);
+    });
+
+    app.get("/users", async (req, res) => {
+      const result = await userCollection.find({}).toArray();
+      res.send(result);
+    });
+
+    app.get("/admin/:email", async (req, res) => {
+      const email = req.params.email;
+      const user = await userCollection.findOne({ email: email });
+      console.log(user)
+      const isAdmin = user.role === "admin";
+      const admin = isAdmin;
+      console.log('email', admin)
+      res.send(admin);
     });
 
     //sending data to the serverAp
@@ -73,6 +112,48 @@ async function run() {
       const appointment = req.body;
       const result = await appointmentCollection.insertOne(appointment);
       res.send(result);
+    });
+
+    app.put("/users/:email", async (req, res) => {
+      const email = req.params.email;
+      const user = req.body;
+      const filter = { email: email };
+      const options = { upsert: true };
+      const updatedDoc = {
+        $set: user,
+      };
+      const result = await userCollection.updateOne(
+        filter,
+        updatedDoc,
+        options
+      );
+      const token = jwt.sign(
+        {
+          email: email,
+        },
+        process.env.ACCESS_TOKEN_SECRET,
+        { expiresIn: "24h" }
+      );
+      res.send({ result, token });
+      4;
+    });
+
+    app.put("/users/admin/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const requesterEmail = req.decoded.email;
+      const requesterAccount = await userCollection.findOne({
+        email: requesterEmail,
+      });
+      if (requesterAccount.role === "admin") {
+        const filter = { email: email };
+        const updatedDoc = {
+          $set: { role: "admin" },
+        };
+        const result = await userCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+      } else {
+        res.status(403).send({ message: "Forbidden Access" });
+      }
     });
 
     //deleting data from the server
@@ -90,11 +171,18 @@ async function run() {
       res.send(result);
     });
 
+    app.delete("/users/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: ObjectId(id) };
+      const result = await userCollection.deleteOne(query);
+      res.send(result);
+    });
+
     //payment
     app.post("/create-payment-intent", async (req, res) => {
       const appointment = req.body;
       const price = appointment.price;
-      const amount = price *100;
+      const amount = price * 100;
 
       // Create a PaymentIntent with the order amount and currency
       const paymentIntent = await stripe.paymentIntents.create({
@@ -122,7 +210,6 @@ async function run() {
       const result = await paymentCollection.insertOne(payment);
       res.send(updatedResult);
     });
-
   } finally {
     // await client.close();
   }
