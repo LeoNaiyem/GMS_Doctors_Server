@@ -43,6 +43,7 @@ async function run() {
     const appointmentCollection = database.collection("appointments");
     const paymentCollection = database.collection("payments");
     const userCollection = database.collection("users");
+    const reviewCollection = database.collection("reviews");
 
     // loading data from the database
     app.get("/services", async (req, res) => {
@@ -66,6 +67,20 @@ async function run() {
       res.send(result);
     });
 
+    app.get("/allAppointments", verifyToken, async (req, res) => {
+      const email = req.query.email;
+      const decodedEmail = req.decoded.email;
+      const requester = await userCollection.findOne({ email: decodedEmail });
+      const isAdmin = requester.role === "admin";
+      if (decodedEmail === email && isAdmin) {
+        const query = {};
+        const cursor = appointmentCollection.find(query);
+        const result = await cursor.toArray();
+        res.send(result);
+      } else {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+    });
     app.get("/appointments", verifyToken, async (req, res) => {
       const email = req.query.email;
       const decodedEmail = req.decoded.email;
@@ -91,13 +106,29 @@ async function run() {
       res.send(result);
     });
 
+    app.get("/reviews/user", verifyToken, async (req, res) => {
+      const email = req.query.email;
+      const decodedEmail = req.decoded.email;
+      if (decodedEmail === email) {
+        const query = { email: email };
+        const cursor = reviewCollection.find(query);
+        const result = await cursor.toArray();
+        res.send(result);
+      } else {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+    });
+
+    app.get("/reviews", async (req, res) => {
+      const result = await reviewCollection.find({}).toArray();
+      res.send(result);
+    });
+
     app.get("/admin/:email", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email: email });
-      console.log(user)
       const isAdmin = user.role === "admin";
       const admin = isAdmin;
-      console.log('email', admin)
       res.send(admin);
     });
 
@@ -111,6 +142,18 @@ async function run() {
     app.post("/appointments", async (req, res) => {
       const appointment = req.body;
       const result = await appointmentCollection.insertOne(appointment);
+      res.send(result);
+    });
+
+    app.put("/allAppointments/:id", async (req, res) => {
+      const id = req.params.id;
+      const statusOb = req.body;
+      const status = statusOb.status;
+      const filter = { _id: ObjectId(id) };
+      const updatedDoc = {
+        $set: { status: status },
+      };
+      const result = await appointmentCollection.updateOne(filter, updatedDoc);
       res.send(result);
     });
 
@@ -156,6 +199,12 @@ async function run() {
       }
     });
 
+    app.post("/reviews", async (req, res) => {
+      const review = req.body;
+      const result = await reviewCollection.insertOne(review);
+      res.send(result);
+    });
+
     //deleting data from the server
     app.delete("/services/:id", async (req, res) => {
       const id = req.params.id;
@@ -175,6 +224,13 @@ async function run() {
       const id = req.params.id;
       const query = { _id: ObjectId(id) };
       const result = await userCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    app.delete("/reviews/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: ObjectId(id) };
+      const result = await reviewCollection.deleteOne(query);
       res.send(result);
     });
 
